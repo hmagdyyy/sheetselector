@@ -6,81 +6,72 @@ from openpyxl import load_workbook
 
 st.set_page_config(page_title="Select Sheets", page_icon="📄", layout="centered")
 st.title("📄 Extract Selected Sheets from Excel")
-st.caption("Uploads stay in memory. We preserve formulas, formatting, and macros (if .xlsm).")
 
-xlsx_file = st.file_uploader("Upload Excel (.xlsx / .xlsm)", type=["xlsx", "xlsm"])
-csv_file  = st.file_uploader("Upload CSV with a 'SheetName' column", type=["csv"])
+# One uploader for both files → fewer state issues
+files = st.file_uploader(
+    "Upload your Excel (.xlsx/.xlsm) and CSV (with 'SheetName')",
+    type=["xlsx", "xlsm", "csv"],
+    accept_multiple_files=True,
+    key="files_upl"
+)
 
-if st.button("Build file", disabled=not (xlsx_file and csv_file)):
+xlsx_file, csv_file = None, None
+if files:
+    for f in files:
+        name = f.name.lower()
+        if name.endswith((".xlsx", ".xlsm")) and xlsx_file is None:
+            xlsx_file = f
+        elif name.endswith(".csv") and csv_file is None:
+            csv_file = f
+
+    # Helpful UI feedback
+    st.write("**Detected:**")
+    st.write("• Excel:", xlsx_file.name if xlsx_file else "—")
+    st.write("• CSV:", csv_file.name if csv_file else "—")
+
+ready = (xlsx_file is not None and csv_file is not None)
+
+if st.button("Build file", disabled=not ready, key="build_btn"):
     try:
-        # --- read CSV safely ---
+        # read CSV
         wanted_df = pd.read_csv(csv_file, dtype=str)
         if "SheetName" not in wanted_df.columns:
-            st.error("CSV must contain a column named 'SheetName'.")
+            st.error("CSV must contain a 'SheetName' column.")
             st.stop()
-        wanted_sheets = (
-            wanted_df["SheetName"]
-            .dropna()
-            .map(lambda s: s.strip())
-            .tolist()
-        )
-        if not wanted_sheets:
+        wanted = (wanted_df["SheetName"].dropna().map(str.strip).tolist())
+        if not wanted:
             st.error("No sheet names found in CSV.")
             st.stop()
 
-        # --- detect macros & set output extension accordingly ---
-        src_name = xlsx_file.name
-        ext = Path(src_name).suffix.lower()
-        keep_vba = (ext == ".xlsm")
+        # detect macros
+        keep_vba = Path(xlsx_file.name).suffix.lower() == ".xlsm"
         out_ext = ".xlsm" if keep_vba else ".xlsx"
 
-        # Important: read file bytes once and wrap in BytesIO
+        # IMPORTANT: read bytes once; wrap in BytesIO
         xlsx_bytes = xlsx_file.getvalue()
-        xlsx_buf = io.BytesIO(xlsx_bytes)
+        wb = load_workbook(io.BytesIO(xlsx_bytes), data_only=False, keep_vba=keep_vba)
 
-        # --- load workbook with formulas & formatting preserved ---
-        wb = load_workbook(filename=xlsx_buf, data_only=False, keep_vba=keep_vba)
-
+        # filter sheets
         source_sheetnames = wb.sheetnames
-        wanted_set = set(wanted_sheets)
-
-        # warn about missing sheets
-        missing = [s for s in wanted_sheets if s not in source_sheetnames]
-        if missing:
-            st.warning("Not found in source file: " + ", ".join(missing))
-
-        # abort if nothing matches
-        matched = [s for s in wanted_sheets if s in source_sheetnames]
+        wanted_set = set(wanted)
+        matched = [s for s in wanted if s in source_sheetnames]
+        missing = [s for s in wanted if s not in source_sheetnames]
         if not matched:
-            st.error("No matching sheets found. Check your CSV and sheet names.")
-            st.stop()
+            st.error("No matching sheets found in the workbook."); st.stop()
 
-        # --- remove unwanted sheets (mutate in place) ---
-        for name in list(source_sheetnames):  # copy list since we'll mutate
+        for name in list(source_sheetnames):
             if name not in wanted_set:
-                ws = wb[name]
-                wb.remove(ws)
+                wb.remove(wb[name])
 
-        # --- save to bytes and serve ---
+        # save to bytes
         out_buf = io.BytesIO()
-        # For macros, ensure .xlsm is used so VBA is preserved
-        wb.save(out_buf)
-        out_buf.seek(0)
-
+        wb.save(out_buf); out_buf.seek(0)
         out_name = f"SelectedSheets{out_ext}"
-        st.success(f"✅ Done! Saved filtered workbook → {out_name}")
-        st.download_button(
-            "Download file",
-            data=out_buf,
-            file_name=out_name,
-            mime="application/vnd.ms-excel" if keep_vba else "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        )
 
-        # Optional: show what will be included
-        st.write("**Included sheets:**", ", ".join(matched))
+        st.success(f"✅ Done! {out_name}")
+        st.download_button("Download file", data=out_buf, file_name=out_name)
         if missing:
-            st.write("**Missing sheets:**", ", ".join(missing))
+            st.warning("Missing sheets: " + ", ".join(missing))
 
     except Exception as e:
-        st.error("Something went wrong.")
-        st.exception(e)
+        st.error(f"Error: {e}")
