@@ -195,18 +195,4 @@ if btn:
     except Exception as e:
         st.error(f"Error: {e}")
 
-# Debug footer (optional, comment out if not needed)
-with st.expander("Runtime info (debug)"):
-    import sys
-    st.write("Python:", sys.version)
-    try:
-        import openpyxl
-        st.write("openpyxl:", openpyxl.__version__)
-    except Exception as e:
-        st.write("openpyxl import error:", e)
-    try:
-        import pandas as pd as _pd_tmp  # noqa
-        st.write("pandas:", pd.__version__)
-    except Exception as e:
-        st.write("pandas import error:", e)
 
